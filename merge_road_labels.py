@@ -41,11 +41,11 @@ def merge_voxel_labels(label_sort, count, desired_label):
     return merged_voxel_labels
 
 
-seq = "01"
-start = 0
-end = 1300
-path = "dataset/sequences"
-label_dir = "labels"
+seq = "02"
+start = 1140
+end = 1195
+path = "../Huawei/dataset/sequences"
+label_dir = "predictions"
 lidar_dir = "velodyne"
 grid_size = 0.1
 
@@ -96,14 +96,14 @@ merged_labels_sorted = merged_voxel_labels[inverse]
 merged_labels_original = np.empty_like(merged_labels_sorted)
 merged_labels_original[idx_sort] = merged_labels_sorted
 
-for id in range(start, end + 1):
-    merged_labels_original[(id - start) * 46080 : (id - start + 1) * 46080].tofile(
-        os.path.join(path, seq, "predictions", str(id).zfill(6) + ".label")
-    )
+# for id in range(start, end + 1):
+#     merged_labels_original[(id - start) * 46080 : (id - start + 1) * 46080].tofile(
+#         os.path.join(path, seq, "predictions", str(id).zfill(6) + ".label")
+#     )
 
-# all_pts.reshape(-1).tofile(
-#     os.path.join(path, "02", "velodyne", str(0).zfill(6) + ".bin")
-# )
-# merged_labels_original.tofile(
-#     os.path.join(path, "02", "labels", str(0).zfill(6) + ".label")
-# )
+all_pts.reshape(-1).tofile(
+    str(0).zfill(6) + ".bin"
+)
+merged_labels_original.tofile(
+    str(0).zfill(6) + ".label"
+)
