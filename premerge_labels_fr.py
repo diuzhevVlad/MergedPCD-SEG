@@ -2,71 +2,22 @@
 import os
 
 import numpy as np
-from kiss_icp.datasets import dataset_factory
-from kiss_icp.pipeline import OdometryPipeline
-import matplotlib.pyplot as plt
 import tqdm
-from model import PointTransformerV3
 import torch
-from collections import OrderedDict
+from mmdet3d.apis import init_model, inference_segmentor
 
-segmodel = PointTransformerV3(
-    in_channels=4,
-    order=["z", "z-trans", "hilbert", "hilbert-trans"],
-    stride=(2, 2, 2, 2),
-    enc_depths=(2, 2, 2, 6, 2),
-    enc_channels=(32, 64, 128, 256, 512),
-    enc_num_head=(2, 4, 8, 16, 32),
-    enc_patch_size=(128, 128, 128, 128, 128),
-    dec_depths=(2, 2, 2, 2),
-    dec_channels=(64, 64, 128, 256),
-    dec_num_head=(4, 4, 8, 16),
-    dec_patch_size=(128, 128, 128, 128),
-    mlp_ratio=4,
-    qkv_bias=True,
-    qk_scale=None,
-    attn_drop=0.0,
-    proj_drop=0.0,
-    drop_path=0.3,
-    shuffle_orders=True,
-    pre_norm=True,
-    enable_rpe=False,
-    enable_flash=False,
-    upcast_attention=False,
-    upcast_softmax=False,
-    cls_mode=False,
-    pdnorm_bn=False,
-    pdnorm_ln=False,
-    pdnorm_decouple=True,
-    pdnorm_adaptive=False,
-    pdnorm_affine=True,
-    pdnorm_conditions=("nuScenes", "SemanticKITTI", "Waymo"),
-).cuda()
-seg_head = torch.nn.Linear(64, 19).cuda()
 
-checkpoint = torch.load(
-    "best_model.pth", map_location=lambda storage, loc: storage.cuda()
-)
+config_path = "configs/frnet/frnet-semantickitti_seg.py"
+checkpoint_path = "frnet-semantickitti_seg.pth"
+model = init_model(config_path, checkpoint_path)
 
-weight_backbone = OrderedDict()
-weight_seg_head = OrderedDict()
-
-for key, value in checkpoint.items():
-    if "backbone" in key:
-        weight_backbone[key.replace("module.backbone.", "")] = value
-    elif "seg_head" in key:
-        weight_seg_head[key.replace("module.seg_head.", "")] = value
-
-load_state_info1 = segmodel.load_state_dict(weight_backbone, strict=True)
-load_state_info2 = seg_head.load_state_dict(weight_seg_head, strict=True)
-assert load_state_info1 and load_state_info2
 
 data_root = ".."
 data_name = "SemanticKITTI"
 sequence = "08"
-heap_size = 3
+heap_size = 1
 sequence_root = os.path.join(data_root, f"{data_name}/dataset/sequences/{sequence}")
-save_root = os.path.join(data_root, f"{data_name}/{f'predictions_premerged_pt_{heap_size}' if heap_size > 1 else 'dataset'}/sequences/{sequence}")
+save_root = os.path.join(data_root, f"{data_name}/{f'predictions_premerged_fr_{heap_size}' if heap_size > 1 else 'predictions_fr'}/sequences/{sequence}")
 merged_root = os.path.join(data_root, f"{data_name}/dataset_premerged_{heap_size}/sequences/{sequence}") if heap_size > 1 else None
 merged_root = None
 lidar_root = os.path.join(sequence_root, "velodyne")
@@ -133,7 +84,7 @@ def grid_sample(data, grid_size):
 pcd_heap = []
 pcd_lens = []
 pcd_ind = []
-procceed_full = False
+procceed_full = True
 with torch.no_grad():
     for pcd_file_id in tqdm.tqdm(range(len(pcd_files))):
         pts = np.fromfile(
@@ -191,38 +142,22 @@ with torch.no_grad():
         heaped_pts[:, :3] = transformed[:, :3]
 
         if procceed_full:
-            feat = torch.as_tensor(heaped_pts).cuda()
-            batch = torch.zeros(feat.shape[0],dtype=int).cuda()
-            data = {
-                "feat": feat,
-                "coord": feat[:,:3],
-                "grid_size": 0.05,
-                "batch": batch,
-            }
-            probs = torch.softmax(seg_head(segmodel(data)["feat"]), dim=1)
-            labels = torch.argmax(probs, dim=1).cpu().numpy()
+            heaped_pts.reshape(-1).tofile("/tmp/temp_pcd.bin")
+            seg_res = inference_segmentor(model, "/tmp/temp_pcd.bin")
+            labels = seg_res[0].pred_pts_seg.pts_semantic_mask.cpu().numpy()
             labels = np.vectorize(learning_map_inv.__getitem__)(
-                        labels & 0xFFFF
-                    ).astype(np.int32)
+                labels & 0xFFFF
+            ).astype(np.int32)
             full_labels = labels
 
         else: 
             feat, grid_coord, min_coord, idx_sort, count, inverse, idx_select = grid_sample(heaped_pts, 0.05)
-            # print(heaped_pts.shape, feat.shape)
-            feat = torch.as_tensor(feat).cuda()
-            grid_coord = torch.as_tensor(grid_coord).cuda()
-            batch = torch.zeros(feat.shape[0],dtype=int).cuda()
-            data = {
-                "feat": feat,
-                "coord": feat[:,:3],
-                "grid_coord": grid_coord,
-                "batch": batch,
-            }
-            probs = torch.softmax(seg_head(segmodel(data)["feat"]), dim=1)
-            labels = torch.argmax(probs, dim=1).cpu().numpy()
+            feat.reshape(-1).tofile("/tmp/temp_pcd.bin")
+            seg_res = inference_segmentor(model, "/tmp/temp_pcd.bin")
+            labels = seg_res[0].pred_pts_seg.pts_semantic_mask.cpu().numpy()
             labels = np.vectorize(learning_map_inv.__getitem__)(
-                        labels & 0xFFFF
-                    ).astype(np.int32)
+                labels & 0xFFFF
+            ).astype(np.int32)
             unsorted_inverse = np.empty_like(inverse)
             unsorted_inverse[idx_sort] = inverse
             full_labels = labels[unsorted_inverse]
@@ -241,6 +176,6 @@ with torch.no_grad():
             for i in range(len(pcd_heap)//2, heap_size):
                 full_labels[cs[i]:cs[1+i]].tofile(os.path.join(pred_root, str(pcd_ind[i]).zfill(6)+".label"))
         
-        del data, heaped_pts, probs, feat, batch
+        del heaped_pts, feat
         torch.cuda.empty_cache()
-
+os.remove("/tmp/temp_pcd.bin")

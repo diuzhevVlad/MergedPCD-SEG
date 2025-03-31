@@ -15,11 +15,6 @@ from torchsparse.utils.collate import sparse_collate
 
 configs.load("configs/semantic_kitti/spvcnn/cr0p5.yaml", recursive=True)
 
-
-checkpoint = torch.load(
-    "best_model.pth", map_location=lambda storage, loc: storage.cuda()
-)
-
 model = builder.make_model().cuda()
 checkpoint = torch.load(
     "runs/run-993f3583/checkpoints/max-iou-test.pt", map_location=lambda storage, loc: storage.cuda()
@@ -28,10 +23,13 @@ load_state_info = model.load_state_dict(checkpoint["model"], strict=True)
 assert load_state_info
 
 data_root = ".."
-sequence_root = os.path.join(data_root, "SemanticKITTI/dataset/sequences/08")
-save_root = os.path.join(data_root, "SemanticKITTI/predictions_sp/sequences/08")
+data_name = "SemanticKITTI"
+sequence = "08"
+heap_size = 3
+sequence_root = os.path.join(data_root, f"{data_name}/dataset/sequences/{sequence}")
+save_root = os.path.join(data_root, f"{data_name}/{f'predictions_premerged_pt_{heap_size}' if heap_size > 1 else 'dataset'}/sequences/{sequence}")
+merged_root = os.path.join(data_root, f"{data_name}/dataset_premerged_{heap_size}/sequences/{sequence}") if heap_size > 1 else None
 lidar_root = os.path.join(sequence_root, "velodyne")
-labels_root = os.path.join(sequence_root, "labels")
 poses_path = os.path.join(sequence_root, "poses.npy")
 pred_root = os.path.join(save_root, "predictions")
 
@@ -64,7 +62,6 @@ learning_map_inv = {
 pcd_heap = []
 pcd_lens = []
 pcd_ind = []
-heap_size = 5
 procceed_full = False
 model.eval()
 with torch.no_grad():
@@ -130,7 +127,11 @@ with torch.no_grad():
                             ).astype(np.int32)
             full_labels = outputs
 
-        
+        if merged_root is not None:
+            os.makedirs(os.path.join(merged_root, "velodyne"), exist_ok=True)
+            os.makedirs(os.path.join(merged_root, "labels"), exist_ok=True)
+            heaped_pts.tofile(os.path.join(merged_root, "velodyne", str(pcd_file_id).zfill(6)+".bin"))
+            full_labels.tofile(os.path.join(merged_root, "labels", str(pcd_file_id).zfill(6)+".label"))
 
         os.makedirs(pred_root, exist_ok=True)
         cs = np.cumsum([0] + pcd_lens)

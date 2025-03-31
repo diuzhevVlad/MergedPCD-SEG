@@ -29,12 +29,14 @@ def merge_voxel_labels(label_sort, count, desired_label):
 
 data_root = ".."
 data_name = "SemanticKITTI"
+labels_name = "predictions_sp" # dataset
 sequence = "08"
 heap_size = 3
 sequence_root = os.path.join(data_root, f"{data_name}/dataset/sequences/{sequence}")
-labels_root = os.path.join(sequence_root, "predictions")
-save_root = os.path.join(data_root, f"{data_name}/{f'predictions_postmerged_pt_{heap_size}'}/sequences/{sequence}")
+labels_root = os.path.join(data_root, f"{data_name}/{labels_name}/sequences/{sequence}/predictions")
+save_root = os.path.join(data_root, f"{data_name}/{f'predictions_postmerged_sp_{heap_size}'}/sequences/{sequence}")
 merged_root = os.path.join(data_root, f"{data_name}/dataset_postmerged_{heap_size}/sequences/{sequence}")
+merged_root = None
 lidar_root = os.path.join(sequence_root, "velodyne")
 poses_path = os.path.join(sequence_root, "poses.npy")
 pred_root = os.path.join(save_root, "predictions")
