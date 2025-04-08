@@ -114,33 +114,6 @@ with torch.no_grad():
         ).T
         heaped_pts[:, :3] = transformed[:, :3]
 
-        pts = np.fromfile(
-            os.path.join(lidar_root, pcd_files[pcd_file_id]), dtype=np.float32
-        ).reshape((-1, 4))
-
-        pts_hom = np.hstack([pts[:, :3], np.ones((pts.shape[0], 1), dtype=pts.dtype)])
-        transformed = (
-            poses[pcd_file_id]
-            @ pts_hom.T
-        ).T
-        pts[:, :3] = transformed[:, :3]
-        pcd_heap.append(pts.copy())
-        pcd_lens.append(pts.shape[0])
-        pcd_ind.append(pcd_file_id)
-        if len(pcd_heap) > heap_size:
-            pcd_heap.pop(0)
-            pcd_lens.pop(0)
-            pcd_ind.pop(0)
-        heaped_pts = np.vstack(pcd_heap)
-        
-
-        pts_hom = np.hstack([heaped_pts[:, :3], np.ones((heaped_pts.shape[0], 1), dtype=heaped_pts.dtype)])
-        transformed = (
-            np.linalg.inv(poses[pcd_ind[0]])
-            @ pts_hom.T
-        ).T
-        heaped_pts[:, :3] = transformed[:, :3]
-
         if procceed_full:
             heaped_pts.reshape(-1).tofile("/tmp/temp_pcd.bin")
             seg_res = inference_segmentor(model, "/tmp/temp_pcd.bin")

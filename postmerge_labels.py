@@ -28,15 +28,16 @@ def merge_voxel_labels(label_sort, count, desired_label):
 
 
 data_root = ".."
-data_name = "SemanticKITTI"
-labels_name = "predictions_sp" # dataset
-sequence = "08"
-heap_size = 3
+data_name = "Huawei"
+labels_name = "dataset" # dataset
+sequence = "04"
+heap_size = 5
+method_name = "pt"
 sequence_root = os.path.join(data_root, f"{data_name}/dataset/sequences/{sequence}")
 labels_root = os.path.join(data_root, f"{data_name}/{labels_name}/sequences/{sequence}/predictions")
-save_root = os.path.join(data_root, f"{data_name}/{f'predictions_postmerged_sp_{heap_size}'}/sequences/{sequence}")
+save_root = os.path.join(data_root, f"{data_name}/{f'predictions_postmerged_{method_name}_{heap_size}'}/sequences/{sequence}")
 merged_root = os.path.join(data_root, f"{data_name}/dataset_postmerged_{heap_size}/sequences/{sequence}")
-merged_root = None
+# merged_root = None
 lidar_root = os.path.join(sequence_root, "velodyne")
 poses_path = os.path.join(sequence_root, "poses.npy")
 pred_root = os.path.join(save_root, "predictions")
@@ -74,9 +75,15 @@ for frame_id in tqdm.tqdm(range(odometry.shape[0]), desc="Frames"):
         pcd_ind.pop(0)
 
     heaped_pts = np.vstack(pcd_heap)
+    pts_hom = np.hstack([heaped_pts[:, :3], np.ones((heaped_pts.shape[0], 1), dtype=heaped_pts.dtype)])
+    transformed = (
+        np.linalg.inv(odometry[pcd_ind[0]])
+        @ pts_hom.T
+    ).T
+    heaped_pts[:, :3] = transformed[:, :3]
     heaped_labels = np.concatenate(label_heap)
 
-    scaled_coord = heaped_pts / grid_size
+    scaled_coord = heaped_pts[:, :3] / grid_size
     grid_coord = np.floor(scaled_coord).astype(np.int32)
     min_coord = grid_coord.min(axis=0)
     grid_coord -= min_coord  # shift so indices are non-negative
@@ -89,6 +96,7 @@ for frame_id in tqdm.tqdm(range(odometry.shape[0]), desc="Frames"):
 
     # Group voxels using unique keys.
     _, inverse, count = np.unique(key_sort, return_inverse=True, return_counts=True)
+    # print(np.max(count))
 
     # Merge labels per voxel.
     merged_voxel_labels = merge_voxel_labels(label_sort, count, desired_label)
