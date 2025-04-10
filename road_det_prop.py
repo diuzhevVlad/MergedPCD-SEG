@@ -3,8 +3,8 @@ import open3d as o3d
 from scipy.spatial import KDTree
 
 # Load and preprocess data
-lidar_dir = "../Huawei/dataset/sequences/03/velodyne"
-points = np.fromfile(f"{lidar_dir}/000005.bin", dtype=np.float32).reshape(-1, 4)
+lidar_dir = "../Huawei/dataset/sequences/01/velodyne"
+points = np.fromfile(f"{lidar_dir}/000204.bin", dtype=np.float32).reshape(-1, 4)
 pcd = o3d.geometry.PointCloud()
 pcd.points = o3d.utility.Vector3dVector(points[:, :3])
 
