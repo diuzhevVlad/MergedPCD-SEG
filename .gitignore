@@ -175,3 +175,5 @@ cython_debug/
 results
 poses
 *.pth
+cloth_nodes.txt
+*.rrd

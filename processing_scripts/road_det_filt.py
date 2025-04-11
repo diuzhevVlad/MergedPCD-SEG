@@ -59,10 +59,10 @@ load_state_info1 = segmodel.load_state_dict(weight_backbone, strict=True)
 load_state_info2 = seg_head.load_state_dict(weight_seg_head, strict=True)
 assert load_state_info1 and load_state_info2
 
-lidar_dir = "../Huawei/dataset/sequences/00/velodyne"
-ORDER = 1
+lidar_dir = "../Huawei/dataset/sequences/04/velodyne"
+ORDER = 2
 
-points = np.fromfile(f"{lidar_dir}/000382.bin", dtype=np.float32).reshape(-1, 4)
+points = np.fromfile(f"{lidar_dir}/001235.bin", dtype=np.float32).reshape(-1, 4)
 points = points[(points[:,0] > 0)]
 # points[:,3] *= (255 / points[:,3].max())
 

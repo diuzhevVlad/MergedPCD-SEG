@@ -17,10 +17,10 @@ labels_dir = "../Huawei/dataset/sequences/03/predictions"
 pts = np.fromfile(f"{lidar_dir}/000000.bin", dtype=np.float32).reshape(-1, 4)
 
 print(pts[:,3].max())
-# labels = np.fromfile(f"{labels_dir}/000000.label", dtype=np.int32)
-# pts_cl = colors[pts[:,3].astype(int)]
+labels = np.fromfile(f"{labels_dir}/000000.label", dtype=np.int32)
+pts_cl = colors[pts[:,3].astype(int)]
 
-# rr.log(
-#     "my_points",
-#     rr.Points3D(pts[:,:3], colors=pts_cl, radii=0.05, labels=labels.astype(np.bytes0))
-# )
+rr.log(
+    "my_points",
+    rr.Points3D(pts[:,:3], colors=pts_cl, radii=0.05, labels=labels.astype(np.bytes0))
+)
