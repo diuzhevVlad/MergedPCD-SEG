@@ -14,6 +14,7 @@ from model import PointTransformerV3
 
 # Constants
 LINES = 96 # 96 / 192
+# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_03_04-20_23_54__unparsed"
 MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_28-16_28_54__unparsed"
 # MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_21-16_27_56__unparsed"
 LIDAR_DIR = os.path.join(MAIN_DIR, "pcd")
@@ -317,7 +318,7 @@ def main():
     start = 0
     end = len(pcd_files)
 
-    start = 1000
+    start = 0
     end = len(pcd_files)
 
     for pcd_file, img_file in tqdm.tqdm(zip(pcd_files[start:end], img_files[start:end])):
