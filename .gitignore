@@ -177,3 +177,4 @@ poses
 *.pth
 cloth_nodes.txt
 *.rrd
+*.png

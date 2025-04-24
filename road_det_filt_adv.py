@@ -10,15 +10,25 @@ from sklearn.linear_model import RANSACRegressor, LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 from typing import Tuple
 from model import PointTransformerV3
+import open3d as o3d
 
 
 # Constants
-LINES = 96 # 96 / 192
+LINES = 96 # 96 / 192 
+# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_04_08-15_42_42__unparsed"
+# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_03_04-20_38_39__unparsed"
 # MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_03_04-20_23_54__unparsed"
-MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_28-16_28_54__unparsed"
+# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_28-16_28_54__unparsed"
 # MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_21-16_27_56__unparsed"
+# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_28-16_45_00__unparsed"
+MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_28-16_36_19__unparsed"
+# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_21-16_54_13__unparsed"
+START = None
+STOP = None
+
 LIDAR_DIR = os.path.join(MAIN_DIR, "pcd")
 IMG_DIR = os.path.join(MAIN_DIR, "images")
+ANOMALY_TYPE = "ref" # ref / norm
 POLY_ORDER = 2
 TIME_INCREMENT = 0.1
 PROJ_MAT = np.array([
@@ -217,6 +227,8 @@ def process_frame(pcd_file, img_file, segmodel, seg_head):
     ground_pts = points[ground_idx]
     non_ground_pts = points[non_ground_idx]
 
+    
+
     # Grid sampling and segmentation
     feat, grid_coord, min_coord, idx_sort, count, inverse, idx_select = grid_sample(
         ground_pts, 0.05
@@ -244,47 +256,78 @@ def process_frame(pcd_file, img_file, segmodel, seg_head):
     labels = labels[unsorted_inverse]
 
     # Separate road and non-road points
-    print(points[ground_idx][labels==8,3].mean())
     road_points = ground_pts[labels==8] # pcd_ground.select_by_index(np.where(labels == 8)[0])
-
-    # Fit surface and find anomalies
-    residuals, ransac_model = fit_surface_ransac(road_points[:, :3], order=POLY_ORDER)
-    threshold = np.percentile(residuals, 95)
-
-    # Recompute residuals for all ground points
-    poly = PolynomialFeatures(degree=POLY_ORDER, include_bias=True)
-    X_poly = poly.fit_transform(ground_pts[:, :2])
-    Y_poly = ransac_model.predict(X_poly)
-    residuals = np.abs(Y_poly - ground_pts[:, 2])
-
-    # Prepare data for visualization
-    road_points = ground_pts[residuals <= threshold]
-    non_road_points = ground_pts[residuals > threshold]
+    non_road_points = ground_pts[labels!=8]
     non_ground_points = non_ground_pts
 
+    
+    if road_points.shape[0] > 50:
+        # Fit surface and find anomalies
+        residuals, ransac_model = fit_surface_ransac(road_points[:, :3], order=POLY_ORDER)
+        threshold = np.percentile(residuals, 95)
+
+        # Recompute residuals for all ground points
+        poly = PolynomialFeatures(degree=POLY_ORDER, include_bias=True)
+        X_poly = poly.fit_transform(ground_pts[:, :2])
+        Y_poly = ransac_model.predict(X_poly)
+        residuals = np.abs(Y_poly - ground_pts[:, 2])
+
+        # Prepare data for visualization
+        road_points = ground_pts[residuals <= threshold]
+        non_road_points = ground_pts[residuals > threshold]
+        
     # Anomaly detection
-    anomaly_ref_road_mask_low = (road_points[:,3] < 20)
-    anomaly_ref_road_mask_high = (road_points[:,3] > 80)
+    if ANOMALY_TYPE == "ref":
+        anomaly_ref_road_mask_low = (road_points[:,3] < 20)
+        anomaly_ref_road_mask_high = (road_points[:,3] > 80)
 
-    anomaly_ref_road_points_low = road_points[anomaly_ref_road_mask_low]
-    anomaly_ref_road_points_high = road_points[anomaly_ref_road_mask_high]
+        anomaly_ref_road_points_low = road_points[anomaly_ref_road_mask_low]
+        anomaly_ref_road_points_high = road_points[anomaly_ref_road_mask_high]
 
-    normal_road_points = road_points[~(anomaly_ref_road_mask_low | anomaly_ref_road_mask_high)]
+        normal_road_points = road_points[~(anomaly_ref_road_mask_low | anomaly_ref_road_mask_high)]
 
-    all_pts = np.concatenate([normal_road_points, anomaly_ref_road_points_low, anomaly_ref_road_points_high, non_road_points, non_ground_points])
-    all_clr = np.array([
-        [0., 0., 1.],  # Road (blue)
-        [1., 0., 0.],  # Non-road ground (red)
-        [1., 0., 0.],  # Non-ground (red)
-        [1., 0., 1.],  # low ref (cyan)
-        [0., 1., 1.],  # high ref (cyan)
-    ])[np.concatenate([
-        np.zeros(normal_road_points.shape[0], dtype=int),
-        np.full(anomaly_ref_road_points_low.shape[0], 3, dtype=int),
-        np.full(anomaly_ref_road_points_high.shape[0], 4, dtype=int),
-        np.ones(non_road_points.shape[0], dtype=int),
-        np.full(non_ground_points.shape[0], 2, dtype=int)
-    ])]
+        all_pts = np.concatenate([normal_road_points, anomaly_ref_road_points_low, anomaly_ref_road_points_high, non_road_points, non_ground_points])
+        all_clr = np.array([
+            [0., 0., 1.],  # Road (blue)
+            [1., 0., 0.],  # Non-road ground (red)
+            [1., 0., 0.],  # Non-ground (red)
+            [1., 0., 1.],  # low ref (magenta)
+            [0., 1., 1.],  # high ref (cyan)
+        ])[np.concatenate([
+            np.zeros(normal_road_points.shape[0], dtype=int),
+            np.full(anomaly_ref_road_points_low.shape[0], 3, dtype=int),
+            np.full(anomaly_ref_road_points_high.shape[0], 4, dtype=int),
+            np.ones(non_road_points.shape[0], dtype=int),
+            np.full(non_ground_points.shape[0], 2, dtype=int)
+        ])]
+    elif ANOMALY_TYPE == "norm":
+        road_pcd = o3d.geometry.PointCloud()
+        road_pcd.points = o3d.utility.Vector3dVector(road_points[:, :3])
+        road_pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=10))
+        normals = np.asarray(road_pcd.normals)
+        vertical = np.median(normals, 0)
+        vertical /= np.linalg.norm(vertical, 2)
+        print(np.linalg.norm(normals[0], 2))
+        normal_deviations = 1 - np.abs(normals @ vertical)
+        
+        anomaly_norm_road_mask = (normal_deviations > 1)
+        anomaly_norm_road_points = road_points[anomaly_norm_road_mask]
+        normal_road_points = road_points[~anomaly_norm_road_mask]
+
+        all_pts = np.concatenate([road_points, non_road_points, non_ground_points])
+        all_clr = np.array([
+            [0., 0., 1.],  # Road (blue)
+            [1., 0., 0.],  # Non-road ground (red)
+            [1., 0., 0.],  # Non-ground (red)
+            [1., 1., 0.],  # normal inconsistency (yellow)
+        ])[np.concatenate([
+            np.zeros(normal_road_points.shape[0], dtype=int),
+            np.full(anomaly_norm_road_points.shape[0], 3, dtype=int),
+            np.ones(non_road_points.shape[0], dtype=int),
+            np.full(non_ground_points.shape[0], 2, dtype=int)
+        ])]
+    else:
+        raise ValueError("Invalid anomaly type")
 
     return img, all_pts, all_clr, labels, road_points.shape[0]
 
@@ -315,14 +358,11 @@ def main():
     img_files = sorted(os.listdir(IMG_DIR))
     t = 0
 
-    start = 0
-    end = len(pcd_files)
-
-    start = 0
-    end = len(pcd_files)
+    start = 0 if START is None else START
+    end = len(pcd_files) if STOP is None else STOP
 
     for pcd_file, img_file in tqdm.tqdm(zip(pcd_files[start:end], img_files[start:end])):
-        img, all_pts, all_clr, labels, road_pts_num = process_frame(pcd_file, img_file, segmodel, seg_head)
+        img, all_pts, all_clr, _, road_pts_num = process_frame(pcd_file, img_file, segmodel, seg_head)
         img_proj = draw_points(img, all_pts[:road_pts_num, :3], all_clr[:road_pts_num])
         
         rr.set_time_seconds("sensor_time", t)
