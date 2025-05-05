@@ -15,6 +15,66 @@ import matplotlib.colorbar as mcolorbar
 import matplotlib.pyplot as plt
 from io import BytesIO
 
+from torch_geometric.nn import MessagePassing
+from torch_geometric.nn import global_max_pool
+import torch
+from torch import Tensor
+from torch.nn import Sequential, Linear, ReLU
+from torch_geometric.nn import radius_graph
+
+import time
+
+class PointNetLayer(MessagePassing):
+    def __init__(self, in_channels: int, out_channels: int):
+        # Message passing with "max" aggregation.
+        super().__init__(aggr='max')
+
+        # Initialization of the MLP:
+        # Here, the number of input features correspond to the hidden
+        # node dimensionality plus point dimensionality (=3).
+        self.mlp = Sequential(
+            Linear(in_channels + 3, out_channels),
+            ReLU(),
+            Linear(out_channels, out_channels),
+        )
+
+    def forward(self,
+        h: Tensor,
+        pos: Tensor,
+        edge_index: Tensor,
+    ) -> Tensor:
+        # Start propagating messages.
+        return self.propagate(edge_index, h=h, pos=pos)
+
+    def message(self,
+        h_j: Tensor,
+        pos_j: Tensor,
+        pos_i: Tensor,
+    ) -> Tensor:
+        # h_j: The features of neighbors as shape [num_edges, in_channels]
+        # pos_j: The position of neighbors as shape [num_edges, 3]
+        # pos_i: The central node position as shape [num_edges, 3]
+
+        edge_feat = torch.cat([h_j, pos_j - pos_i], dim=-1)
+        return self.mlp(edge_feat)
+
+class PointNet(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = PointNetLayer(4, 32)  # Use all 4 features
+        self.conv2 = PointNetLayer(32, 32)
+        self.regressor = Linear(32, 1)
+
+    def forward(self, x, pos, edge_index, batch):
+        h = self.conv1(x, pos, edge_index)
+        h = torch.nn.functional.relu(h)
+        h = self.conv2(h, pos, edge_index)
+        h = torch.nn.functional.relu(h)
+        return self.regressor(h)
+
+irreg_model = PointNet().cuda()
+irreg_model.load_state_dict(torch.load("irreg_model.pth"))
+
 
 def value_to_colour(value, vmin=0, vmax=0.06, cmap_name="plasma"):
     # Normalise value → [0, 1] and clip
@@ -124,11 +184,13 @@ def procceed(pcd_file, img_file):
 
     curb_threshold = 0.05 # Height difference to detect curbs
     curb_idxs = []
+
+    start_time = time.time()
     height_diffs = []
 
     for i, pt in zip(range(len(road_points)), road_points):
         # Find neighbors within 0.5m radius
-        idx = tree.query_ball_point(pt[:2], 0.09)
+        idx = tree.query_ball_point(pt[:2], 0.2)
         neighbors = road_points[idx]
 
         # Compute height difference with neighbors
@@ -139,6 +201,15 @@ def procceed(pcd_file, img_file):
             curb_idxs.append(i)
 
     height_diffs = np.array(height_diffs)
+    print(time.time() - start_time)
+
+    start_time = time.time()
+    feat = Tensor(road_points).cuda()
+    edge_index = radius_graph(feat[:,:3], r=0.2, max_num_neighbors=32)
+    with torch.no_grad():
+        height_diffs = irreg_model(feat, feat[:,:3], edge_index, torch.zeros(feat.shape[0], dtype=int).cuda()).cpu().numpy().reshape(-1)
+    print(time.time() - start_time)
+
     img_proj = cv2.cvtColor(draw_points(img, road_points[:, :3], np.array(list(map(value_to_colour, height_diffs)))), cv2.COLOR_RGB2BGR)
     clrbr = colourbar_png(200)
     h, w = clrbr.shape[:2]
