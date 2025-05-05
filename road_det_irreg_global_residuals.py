@@ -104,11 +104,11 @@ def procceed(pcd_file, img_file):
     
     if road_points.shape[0] > 50:
         # Fit surface and find anomalies
-        residuals, ransac_model = fit_surface_ransac(road_points[:, :3], order=2)
+        residuals, ransac_model = fit_surface_ransac(road_points[:, :3], order=1)
         threshold = np.percentile(residuals, 95)
 
         # Recompute residuals for all ground points
-        poly = PolynomialFeatures(degree=2, include_bias=True)
+        poly = PolynomialFeatures(degree=1, include_bias=True)
         X_poly = poly.fit_transform(ground_pts[:, :2])
         Y_poly = ransac_model.predict(X_poly)
         residuals = np.abs(Y_poly - ground_pts[:, 2])
@@ -117,42 +117,18 @@ def procceed(pcd_file, img_file):
         road_points = ground_pts[residuals <= threshold]
         non_road_points = ground_pts[residuals > threshold]
         
+        img_proj = cv2.cvtColor(draw_points(img, road_points[:, :3], np.array(list(map(value_to_colour, residuals[residuals <= threshold])))), cv2.COLOR_RGB2BGR)
 
+        clrbr = colourbar_png(200)
+        h, w = clrbr.shape[:2]
+        y1, y2 = img_proj.shape[0]-h-10, img_proj.shape[0]-10
+        x1, x2 = img_proj.shape[1]-w-10, img_proj.shape[1]-10
+        img_proj[y1:y2, x1:x2][(clrbr[:,:,:3]!=255).all(axis=2)] = clrbr[:,:,:3][(clrbr[:,:,:3]!=255).all(axis=2)]
 
-    road_mask = np.ones(len(road_points),dtype=bool)
-    tree = KDTree(road_points[:, :2])  # Only use (X, Y) for search
+        cv2.imshow("exp", img_proj)
+        cv2.waitKey(0)
+        return
 
-    curb_threshold = 0.05 # Height difference to detect curbs
-    curb_idxs = []
-    height_diffs = []
-
-    for i, pt in zip(range(len(road_points)), road_points):
-        # Find neighbors within 0.5m radius
-        idx = tree.query_ball_point(pt[:2], 0.09)
-        neighbors = road_points[idx]
-
-        # Compute height difference with neighbors
-        height_diff = np.max(neighbors[:,2]) - np.min(neighbors[:,2])
-        height_diffs.append(height_diff)
-
-        if height_diff > curb_threshold:
-            curb_idxs.append(i)
-
-    height_diffs = np.array(height_diffs)
-    img_proj = cv2.cvtColor(draw_points(img, road_points[:, :3], np.array(list(map(value_to_colour, height_diffs)))), cv2.COLOR_RGB2BGR)
-    clrbr = colourbar_png(200)
-    h, w = clrbr.shape[:2]
-    y1, y2 = img_proj.shape[0]-h-10, img_proj.shape[0]-10
-    x1, x2 = img_proj.shape[1]-w-10, img_proj.shape[1]-10
-    img_proj[y1:y2, x1:x2][(clrbr[:,:,:3]!=255).all(axis=2)] = clrbr[:,:,:3][(clrbr[:,:,:3]!=255).all(axis=2)]
-
-    # curb_init_idxs = np.array(curb_idxs)
-    # road_mask[curb_init_idxs] = False
-    # img_proj = draw_points(img, road_points[road_mask, :3], np.array([[0.,0.,255.]]*np.count_nonzero(road_mask)))
-    # img_proj = draw_points(img_proj, road_points[curb_init_idxs, :3], np.array([[255.,0.,0.]]*len(curb_init_idxs)))
-
-    cv2.imshow("exp", img_proj)
-    cv2.waitKey(0)
 
 
 pcd_files = ["../Huawei/special_cases/flat/000000.bin", "../Huawei/special_cases/pothole/000000.bin", "../Huawei/special_cases/unpaved/000000.bin", "../Huawei/special_cases/speedbump/000000.bin"]
