@@ -34,9 +34,6 @@ EXTRINSIC = np.array([
 ])
 
 
-
-
-
 def process_frame(pcd_file, img_file, segmodel, seg_head):
     """Process a single frame of point cloud and image data."""
     # Load and process image
