@@ -6,7 +6,7 @@ from kiss_icp.datasets import dataset_factory
 from kiss_icp.pipeline import OdometryPipeline
 import matplotlib.pyplot as plt
 import tqdm
-from model import PointTransformerV3
+from models import PointTransformerV3
 import torch
 from collections import OrderedDict
 

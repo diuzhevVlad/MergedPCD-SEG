@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import CSF
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import RANSACRegressor, LinearRegression
-from model import PointTransformerV3
+from models import PointTransformerV3
 import torch
 from collections import OrderedDict
 

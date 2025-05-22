@@ -1,28 +1,18 @@
 import os
-from collections import OrderedDict
 import CSF
 import cv2
 import numpy as np
 import rerun as rr
 import torch
 import tqdm
-from sklearn.linear_model import RANSACRegressor, LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
-from typing import Tuple
-from model import PointTransformerV3
+from models import initialize_model_pt
 import open3d as o3d
-
+from utils import *
 
 # Constants
 LINES = 96 # 96 / 192 
-# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_04_08-15_42_42__unparsed"
-# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_03_04-20_38_39__unparsed"
-# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_03_04-20_23_54__unparsed"
-# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_28-16_28_54__unparsed"
-# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_21-16_27_56__unparsed"
-# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_28-16_45_00__unparsed"
 MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_28-16_36_19__unparsed"
-# MAIN_DIR = "/home/vladislav/Documents/Huawei/rosbag2_2025_02_21-16_54_13__unparsed"
 START = None
 STOP = None
 
@@ -44,162 +34,6 @@ EXTRINSIC = np.array([
 ])
 
 
-def initialize_model():
-    """Initialize and load the segmentation model."""
-    segmodel = PointTransformerV3(
-        in_channels=4,
-        order=["z", "z-trans", "hilbert", "hilbert-trans"],
-        stride=(2, 2, 2, 2),
-        enc_depths=(2, 2, 2, 6, 2),
-        enc_channels=(32, 64, 128, 256, 512),
-        enc_num_head=(2, 4, 8, 16, 32),
-        enc_patch_size=(128, 128, 128, 128, 128),
-        dec_depths=(2, 2, 2, 2),
-        dec_channels=(64, 64, 128, 256),
-        dec_num_head=(4, 4, 8, 16),
-        dec_patch_size=(128, 128, 128, 128),
-        mlp_ratio=4,
-        qkv_bias=True,
-        qk_scale=None,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        drop_path=0.3,
-        shuffle_orders=True,
-        pre_norm=True,
-        enable_rpe=False,
-        enable_flash=False,
-        upcast_attention=False,
-        upcast_softmax=False,
-        cls_mode=False,
-        pdnorm_bn=False,
-        pdnorm_ln=False,
-        pdnorm_decouple=True,
-        pdnorm_adaptive=False,
-        pdnorm_affine=True,
-        pdnorm_conditions=("nuScenes", "SemanticKITTI", "Waymo"),
-    ).cuda()
-
-    seg_head = torch.nn.Linear(64, 19).cuda()
-    checkpoint = torch.load("best_model.pth", map_location=lambda storage, loc: storage.cuda())
-
-    # Load model weights
-    weight_backbone = OrderedDict()
-    weight_seg_head = OrderedDict()
-
-    for key, value in checkpoint.items():
-        if "backbone" in key:
-            weight_backbone[key.replace("module.backbone.", "")] = value
-        elif "seg_head" in key:
-            weight_seg_head[key.replace("module.seg_head.", "")] = value
-
-    segmodel.load_state_dict(weight_backbone, strict=True)
-    seg_head.load_state_dict(weight_seg_head, strict=True)
-
-    return segmodel, seg_head
-
-def project_points_to_camera(
-    points: np.ndarray, proj_matrix: np.ndarray, cam_res: Tuple[int, int]
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:  # Return original valid indices
-    if points.shape[0] == 3:
-        points = np.vstack((points, np.ones((1, points.shape[1]))))
-    in_image = points[2, :] > 0  # Initial filter for points in front of the camera
-    depths = points[2, in_image]
-    uvw = np.dot(proj_matrix, points[:, in_image])
-    uv = uvw[:2, :]
-    w = uvw[2, :]
-    uv[0, :] /= w
-    uv[1, :] /= w
-    valid = (uv[0, :] >= 0) & (uv[0, :] < cam_res[0]) & (uv[1, :] >= 0) & (uv[1, :] < cam_res[1])
-    uv_valid = uv[:, valid].astype(int)
-    depths_valid = depths[valid]
-    # Get indices of original points that are valid
-    original_indices = np.where(in_image)[0][valid]
-    return uv_valid, depths_valid, original_indices
-
-
-def fit_surface_ransac(points, order, distance_threshold=0.05):
-    """Fit a polynomial surface using RANSAC and return residuals."""
-    X = points[:, :2]  # XY coordinates
-    y = points[:, 2]   # Z (height)
-
-    poly = PolynomialFeatures(degree=order, include_bias=True)
-    X_poly = poly.fit_transform(X)
-
-    ransac = RANSACRegressor(
-        estimator=LinearRegression(),
-        residual_threshold=distance_threshold,
-        max_trials=100
-    )
-    ransac.fit(X_poly, y)
-
-    y_pred = ransac.predict(X_poly)
-    residuals = np.abs(y - y_pred)
-
-    return residuals, ransac
-
-
-def fnv_hash_vec(arr):
-    """FNV64-1A hash for a 2D array."""
-    assert arr.ndim == 2
-    arr = arr.copy().astype(np.uint64)
-    hashed_arr = np.uint64(14695981039346656037) * np.ones(arr.shape[0], dtype=np.uint64)
-    
-    for j in range(arr.shape[1]):
-        hashed_arr *= np.uint64(1099511628211)
-        hashed_arr = np.bitwise_xor(hashed_arr, arr[:, j])
-    
-    return hashed_arr
-
-
-def grid_sample(data, grid_size):
-    """Sample points using grid-based approach."""
-    scaled_coord = data[:, :3] / np.array(grid_size)
-    grid_coord = np.floor(scaled_coord).astype(int)
-    min_coord = grid_coord.min(0)
-    
-    grid_coord -= min_coord
-    scaled_coord -= min_coord
-    min_coord = min_coord * np.array(grid_size)
-    
-    key = fnv_hash_vec(grid_coord)
-    idx_sort = np.argsort(key)
-    key_sort = key[idx_sort]
-    
-    _, inverse, count = np.unique(key_sort, return_inverse=True, return_counts=True)
-    idx_select = (
-        np.cumsum(np.insert(count, 0, 0)[0:-1]) + 
-        np.random.randint(0, count.max(), count.size) % count
-    )
-    idx_unique = idx_sort[idx_select]
-    
-    return (
-        data[idx_unique], grid_coord[idx_unique], 
-        min_coord.reshape([1, 3]), idx_sort, 
-        count, inverse, idx_select
-    )
-
-def convert_pc(point_cloud: np.ndarray, 
-               elev_range, 
-               azim_range,
-               num_elev: int, 
-               num_azim: int = 480) -> np.ndarray:
-    assert point_cloud.shape[1] == 3, f'Expected pc shape to be (n, 3), got {point_cloud.shape}'    
-    point_cloud = point_cloud.reshape(num_azim, num_elev, 3)
-    neg_mask = np.where(point_cloud[:, :, 0] >= 0, 1, -1)
-    distance_matrix = (
-        np.sqrt(point_cloud[:, :, 0] ** 2 + point_cloud[:, :, 1] ** 2 + point_cloud[:, :, 2] ** 2)
-        * neg_mask  # keep negative values
-    )
-    elev_step = (elev_range[1] - elev_range[0]) / num_elev
-    azim_step = (azim_range[1] - azim_range[0]) / num_azim
-    elev = np.arange(elev_range[0], elev_range[1], elev_step)[::-1]
-    azim = np.arange(azim_range[0], azim_range[1], azim_step)[::-1]
-    elev_mat, azim_mat = np.meshgrid(np.deg2rad(elev), np.deg2rad(azim))
-    x = (distance_matrix * np.cos(elev_mat) * np.cos(azim_mat)).flatten()
-    y = (distance_matrix * np.cos(elev_mat) * np.sin(azim_mat)).flatten()
-    z = (distance_matrix * np.sin(elev_mat)).flatten()
-    
-    return np.stack((x, y, z), axis=-1).reshape(-1, 3)
 
 
 
@@ -331,28 +165,12 @@ def process_frame(pcd_file, img_file, segmodel, seg_head):
 
     return img, all_pts, all_clr, labels, road_points.shape[0]
 
-def draw_points(img, pts, clr):
-    points_hom = np.hstack([pts, np.ones((pts.shape[0],1))])
-    points_cam = EXTRINSIC @ points_hom.T
-
-    # Project points to image plane
-    uv, _, valid_indices = project_points_to_camera(points_cam, PROJ_MAT, (1280, 720))
-    im_cp = img.copy()
-    overlay = img.copy()
-
-    for point, d in zip(uv.T, clr[valid_indices]):
-        c = d * 255
-        c = (int(c[0]), int(c[1]), int(c[2]))
-        cv2.circle(overlay, point, radius=2, color=c, thickness=cv2.FILLED)
-    
-    return cv2.addWeighted(overlay, 0.4, im_cp, 1 - 0.4, 0)
-
 
 def main():
     """Main processing loop."""
     rr.init("rerun_road_segmentation", spawn=True)
 
-    segmodel, seg_head = initialize_model()
+    segmodel, seg_head = initialize_model_pt("best_model.pth")
 
     pcd_files = sorted(os.listdir(LIDAR_DIR))
     img_files = sorted(os.listdir(IMG_DIR))
@@ -363,7 +181,7 @@ def main():
 
     for pcd_file, img_file in tqdm.tqdm(zip(pcd_files[start:end], img_files[start:end])):
         img, all_pts, all_clr, _, road_pts_num = process_frame(pcd_file, img_file, segmodel, seg_head)
-        img_proj = draw_points(img, all_pts[:road_pts_num, :3], all_clr[:road_pts_num])
+        img_proj = draw_points(img, all_pts[:road_pts_num, :3], all_clr[:road_pts_num], EXTRINSIC, PROJ_MAT)
         
         rr.set_time_seconds("sensor_time", t)
         rr.log("img_orig", rr.Image(img))

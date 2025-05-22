@@ -178,3 +178,4 @@ poses
 cloth_nodes.txt
 *.rrd
 *.png
+*.npy

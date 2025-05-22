@@ -809,6 +809,7 @@ class PointTransformerV3(PointModule):
         enable_flash=True,
         upcast_attention=False,
         upcast_softmax=False,
+        
         cls_mode=False,
         pdnorm_bn=False,
         pdnorm_ln=False,
@@ -980,3 +981,111 @@ class PointTransformerV3(PointModule):
         if not self.cls_mode:
             point = self.dec(point)
         return point
+
+
+def initialize_model_pt(weights_path: str):
+    """Initialize and load the segmentation model."""
+    segmodel = PointTransformerV3(
+        in_channels=4,
+        order=["z", "z-trans", "hilbert", "hilbert-trans"],
+        stride=(2, 2, 2, 2),
+        enc_depths=(2, 2, 2, 6, 2),
+        enc_channels=(32, 64, 128, 256, 512),
+        enc_num_head=(2, 4, 8, 16, 32),
+        enc_patch_size=(128, 128, 128, 128, 128),
+        dec_depths=(2, 2, 2, 2),
+        dec_channels=(64, 64, 128, 256),
+        dec_num_head=(4, 4, 8, 16),
+        dec_patch_size=(128, 128, 128, 128),
+        mlp_ratio=4,
+        qkv_bias=True,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        drop_path=0.3,
+        shuffle_orders=True,
+        pre_norm=True,
+        enable_rpe=False,
+        enable_flash=False,
+        upcast_attention=False,
+        upcast_softmax=False,
+        cls_mode=False,
+        pdnorm_bn=False,
+        pdnorm_ln=False,
+        pdnorm_decouple=True,
+        pdnorm_adaptive=False,
+        pdnorm_affine=True,
+        pdnorm_conditions=("nuScenes", "SemanticKITTI", "Waymo"),
+    ).cuda()
+
+    seg_head = torch.nn.Linear(64, 19).cuda()
+    checkpoint = torch.load(weights_path, map_location=lambda storage, loc: storage.cuda())
+
+    # Load model weights
+    weight_backbone = OrderedDict()
+    weight_seg_head = OrderedDict()
+
+    for key, value in checkpoint.items():
+        if "backbone" in key:
+            weight_backbone[key.replace("module.backbone.", "")] = value
+        elif "seg_head" in key:
+            weight_seg_head[key.replace("module.seg_head.", "")] = value
+
+    segmodel.load_state_dict(weight_backbone, strict=True)
+    seg_head.load_state_dict(weight_seg_head, strict=True)
+
+    return segmodel, seg_head
+
+from torch_geometric.nn import MessagePassing
+import torch
+from torch import Tensor
+from torch.nn import Sequential, Linear, ReLU
+
+class PointNetLayer(MessagePassing):
+    def __init__(self, in_channels: int, out_channels: int):
+        # Message passing with "max" aggregation.
+        super().__init__(aggr='max')
+
+        # Initialization of the MLP:
+        # Here, the number of input features correspond to the hidden
+        # node dimensionality plus point dimensionality (=3).
+        self.mlp = Sequential(
+            Linear(in_channels + 3, out_channels),
+            ReLU(),
+            Linear(out_channels, out_channels),
+        )
+
+    def forward(self,
+        h: Tensor,
+        pos: Tensor,
+        edge_index: Tensor,
+    ) -> Tensor:
+        # Start propagating messages.
+        return self.propagate(edge_index, h=h, pos=pos)
+
+    def message(self,
+        h_j: Tensor,
+        pos_j: Tensor,
+        pos_i: Tensor,
+    ) -> Tensor:
+        # h_j: The features of neighbors as shape [num_edges, in_channels]
+        # pos_j: The position of neighbors as shape [num_edges, 3]
+        # pos_i: The central node position as shape [num_edges, 3]
+
+        edge_feat = torch.cat([h_j, pos_j - pos_i], dim=-1)
+        return self.mlp(edge_feat)
+
+class PointNet(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = PointNetLayer(4, 32)  # Use all 4 features
+        self.conv2 = PointNetLayer(32, 32)
+        self.regressor = Linear(32, 1)
+
+    def forward(self, x, pos, edge_index, batch):
+        h = self.conv1(x, pos, edge_index)
+        h = torch.nn.functional.relu(h)
+        h = self.conv2(h, pos, edge_index)
+        h = torch.nn.functional.relu(h)
+        return self.regressor(h)
+
